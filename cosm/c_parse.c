@@ -72,18 +72,29 @@ uint16_t c_parse_pair(const char *word, int width) {
   return pair;
 }
 
-void c_parse_data(const char *word, int width) {
+void c_parse_data(const char *word, int width, bool is_branch) {
   const char *end_pointer;
   const uint16_t pair = strtoul(word, (char **)(&end_pointer), 0);
   
   if (*end_pointer != '\0') {
-    c_refer_t refer = {"", "", c_address, c_byte_count, width};
+    c_refer_t refer = {"", "", c_address, c_byte_count, false, false, is_branch, width};
+    
+    if (*word == '^') {
+      refer.l_shift = true;
+      word++;
+    }
+    
     strncat(refer.l_name, word, 30);
     
     if ((word = strtok(NULL, C_DELIM)) != NULL && !strcmp(word, "-")) {
       if ((word = strtok(NULL, C_DELIM)) == NULL) {
         fprintf(stderr, "cosm: expected parameter after '-'.\n");
         exit(1);
+      }
+      
+      if (*word == '^') {
+        refer.r_shift = true;
+        word++;
       }
       
       strncat(refer.r_name, word, 30);
@@ -94,6 +105,10 @@ void c_parse_data(const char *word, int width) {
   
   if (width == 2) {
     c_byte_insert((uint8_t)(pair >> 8));
+  } else if (*end_pointer == '\0') {
+    if ((pair >> 8) != (is_branch ? (c_address >> 8) : 0)) {
+      fprintf(stderr, "cosm: (warning) '%s' truncated to a byte.\n", word);
+    }
   }
   
   c_byte_insert((uint8_t)(pair >> 0));
@@ -126,7 +141,7 @@ void c_parse_line(const char *word, bool use_u) {
     const int width = ((word[1] == 'p') ? 2 : 1);
     
     while ((word = strtok(NULL, C_DELIM)) != NULL) {
-      c_parse_data(word, width);
+      c_parse_data(word, width, false);
     }
     
     return;
@@ -206,11 +221,7 @@ void c_parse_line(const char *word, bool use_u) {
       continue;
     }
     
-    if (code.param == c_param_none) {
-      continue;
-    }
-    
-    if ((word = strtok(NULL, C_DELIM)) == NULL) {
+    if (code.param != c_param_none && (word = strtok(NULL, C_DELIM)) == NULL) {
       fprintf(stderr, "cosm: expected parameter after '%s'.\n", name);
       exit(1);
     }
@@ -248,11 +259,11 @@ void c_parse_line(const char *word, bool use_u) {
     c_byte_insert(code.code);
     
     if (code.param == c_param_byte) {
-      c_parse_data(word, 1);
+      c_parse_data(word, 1, ((code.code >> 4) == 3));
     }
     
     if (code.param == c_param_pair) {
-      c_parse_data(word, 2);
+      c_parse_data(word, 2, false);
     }
     
     return;
@@ -326,16 +337,24 @@ void c_save(FILE *file) {
       r_pair = r_label->pair;
     }
     
+    if (refer.l_shift) {
+      l_pair = (l_pair >> 8);
+    }
+    
+    if (refer.r_shift) {
+      r_pair = (r_pair >> 8);
+    }
+    
     if (r_pair > l_pair) {
-      fprintf(stderr, "cosm: (warning) '%s - %s' underflowed.\n", refer.l_name, refer.r_name);
+      fprintf(stderr, "cosm: (warning) '%s%s - %s%s' underflowed.\n", (refer.l_shift ? "^" : ""), refer.l_name, (refer.r_shift ? "^" : ""), refer.r_name);
     }
     
     const uint16_t pair = l_pair - r_pair;
     
     if (refer.width == 2) {
       c_byte_array[refer.index++] = (uint8_t)(pair >> 8);
-    } else if ((pair >> 8) != (refer.address >> 8)) {
-      fprintf(stderr, "cosm: (warning) '%s - %s' truncated to a byte.\n", refer.l_name, refer.r_name);
+    } else if ((pair >> 8) != (refer.is_branch ? (refer.address >> 8) : 0)) {
+      fprintf(stderr, "cosm: (warning) '%s%s - %s%s' truncated to a byte.\n", (refer.l_shift ? "^" : ""), refer.l_name, (refer.r_shift ? "^" : ""), refer.r_name);
     }
     
     c_byte_array[refer.index] = (uint8_t)(pair >> 0);
